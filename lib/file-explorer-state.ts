@@ -1,4 +1,7 @@
 const EXPLORER_OPEN_STORAGE_KEY = "pi-web:file-explorer:open";
+const CHANGES_VIEW_STORAGE_KEY = "pi-web:file-explorer:changes-view";
+
+export type ChangesViewMode = "list" | "tree";
 
 interface StorageLike {
   getItem(key: string): string | null;
@@ -30,6 +33,29 @@ export function saveExplorerOpen(
   if (!storage) return;
   try {
     storage.setItem(EXPLORER_OPEN_STORAGE_KEY, String(open));
+  } catch {
+    // Persistence is best-effort; privacy mode and storage quotas must not break the explorer.
+  }
+}
+
+export function loadChangesViewMode(
+  storage: StorageLike | null = getBrowserStorage(),
+): ChangesViewMode {
+  if (!storage) return "list";
+  try {
+    return storage.getItem(CHANGES_VIEW_STORAGE_KEY) === "tree" ? "tree" : "list";
+  } catch {
+    return "list";
+  }
+}
+
+export function saveChangesViewMode(
+  mode: ChangesViewMode,
+  storage: StorageLike | null = getBrowserStorage(),
+): void {
+  if (!storage) return;
+  try {
+    storage.setItem(CHANGES_VIEW_STORAGE_KEY, mode);
   } catch {
     // Persistence is best-effort; privacy mode and storage quotas must not break the explorer.
   }

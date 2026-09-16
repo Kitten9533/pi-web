@@ -290,6 +290,8 @@ export const zhCNLocale: LocalePlugin = {
     "files.explorer": "文件浏览器",
     "files.changedCount": "{count} 个文件",
     "files.changeStats": "{count} 个变更文件，新增 {additions} 行，删除 {deletions} 行",
+    "files.viewAsTree": "树状显示",
+    "files.viewAsList": "列表显示",
     "files.conflictSummary": "已有 {count} 个文件：{files}",
     "files.cannotReplace": "无法替换：{files}",
     "files.replace": "替换",

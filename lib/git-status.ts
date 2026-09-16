@@ -1,4 +1,4 @@
-import type { GitFileStatus } from "./git-types";
+import type { GitFileStatus, GitFileStatusKind } from "./git-types";
 
 export interface GitPorcelainEntry {
   path: string;
@@ -44,4 +44,11 @@ export function classifyGitStatus(entry: GitPorcelainEntry): Pick<GitFileStatus,
   if (pair.includes("R") || pair.includes("C")) return { status: "renamed", code: "R" };
   if (pair.includes("A")) return { status: "added", code: "A" };
   return { status: "modified", code: "M" };
+}
+
+export function aggregateGitStatuses(statuses: GitFileStatusKind[]): GitFileStatusKind | null {
+  if (statuses.length === 0) return null;
+  if (statuses.includes("conflict")) return "conflict";
+  const first = statuses[0];
+  return statuses.every((status) => status === first) ? first : "modified";
 }

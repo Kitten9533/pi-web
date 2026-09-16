@@ -37,3 +37,29 @@ export function buildSearchTree(paths: string[]): SearchTreeNode[] {
   sort(roots);
   return roots;
 }
+
+function compactNode(node: SearchTreeNode): SearchTreeNode {
+  if (!node.isDir) return { ...node, children: [] };
+  let current: SearchTreeNode = {
+    ...node,
+    children: node.children.map(compactNode),
+  };
+  while (
+    current.isDir
+    && current.children.length === 1
+    && current.children[0].isDir
+  ) {
+    const child = current.children[0];
+    current = {
+      name: `${current.name}/${child.name}`,
+      path: child.path,
+      isDir: true,
+      children: child.children,
+    };
+  }
+  return current;
+}
+
+export function compactFolders(nodes: SearchTreeNode[]): SearchTreeNode[] {
+  return nodes.map(compactNode);
+}

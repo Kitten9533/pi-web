@@ -290,6 +290,8 @@ export const zhTWLocale: LocalePlugin = {
     "files.explorer": "檔案瀏覽器",
     "files.changedCount": "{count} 個檔案",
     "files.changeStats": "{count} 個變更檔案，新增 {additions} 行，刪除 {deletions} 行",
+    "files.viewAsTree": "樹狀顯示",
+    "files.viewAsList": "列表顯示",
     "files.conflictSummary": "{count} 個檔案已存在：{files}",
     "files.cannotReplace": "無法取代：{files}",
     "files.replace": "取代",

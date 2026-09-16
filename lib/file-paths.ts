@@ -45,3 +45,13 @@ export function getRelativeFilePath(filePath: string, cwd?: string): string {
 export function joinFilePath(parent: string, child: string): string {
   return `${normalizeFilePathSlashes(parent).replace(/\/$/, "")}/${child}`;
 }
+
+export function getChangeTreePath(filePath: string, cwd?: string): string {
+  const relative = getRelativeFilePath(filePath, cwd);
+  const normalized = normalizeFilePathSlashes(relative);
+  if (!cwd) return normalized;
+  if (normalized.startsWith("/") || /^[a-zA-Z]:\//.test(normalized) || normalized.startsWith("//")) {
+    return getFileName(filePath);
+  }
+  return normalized;
+}

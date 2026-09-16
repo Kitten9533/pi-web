@@ -4,15 +4,18 @@ import { forwardRef, useState, useCallback, useEffect, useImperativeHandle, useM
 import { getFileIcon, FolderIcon } from "./FileIcons";
 import {
   encodeFilePathForApi,
+  getChangeTreePath,
   getFileDirectory,
   getFileName,
   getRelativeFilePath,
   joinFilePath,
   normalizeFilePathSlashes,
 } from "@/lib/file-paths";
+import { aggregateGitStatuses } from "@/lib/git-status";
 import type { GitFileStatus, GitFileStatusKind, GitStatusResponse } from "@/lib/git-types";
 import type { FileIndexEntry } from "@/lib/file-fuzzy";
-import { buildSearchTree, type SearchTreeNode } from "@/lib/search-tree";
+import { loadChangesViewMode, saveChangesViewMode, type ChangesViewMode } from "@/lib/file-explorer-state";
+import { buildSearchTree, compactFolders, type SearchTreeNode } from "@/lib/search-tree";
 import { useI18n } from "@/hooks/useI18n";
 type Translate = ReturnType<typeof useI18n>["t"];
 
@@ -479,6 +482,7 @@ function ChangeRow({
   const [hovered, setHovered] = useState(false);
   const name = getFileName(status.filePath);
   const rel = getRelativeFilePath(status.filePath, cwd);
+  const deleted = status.status === "deleted";
   return (
     <div
       onClick={() => onOpenFile(status.filePath, name, { modeHint: "diff" })}
@@ -498,7 +502,6 @@ function ChangeRow({
         userSelect: "none",
       }}
     >
-      <GitStatusBadge status={status} t={t} />
       <span style={{ flexShrink: 0, display: "flex", alignItems: "center", opacity: 0.85 }}>
         {getFileIcon(name, 13)}
       </span>
@@ -506,6 +509,7 @@ function ChangeRow({
         style={{
           fontSize: 12,
           color: "var(--text)",
+          textDecoration: deleted ? "line-through" : undefined,
           overflow: "hidden",
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",
@@ -514,6 +518,155 @@ function ChangeRow({
       >
         {rel}
       </span>
+      <GitStatusBadge status={status} t={t} />
+    </div>
+  );
+}
+
+function collectDirectoryPaths(nodes: SearchTreeNode[]): Set<string> {
+  const dirs = new Set<string>();
+  const walk = (list: SearchTreeNode[]) => {
+    for (const node of list) {
+      if (!node.isDir) continue;
+      dirs.add(node.path);
+      walk(node.children);
+    }
+  };
+  walk(nodes);
+  return dirs;
+}
+
+function folderStatusByPath(
+  nodes: SearchTreeNode[],
+  fileStatusByPath: Map<string, GitFileStatusKind>,
+): Map<string, GitFileStatusKind> {
+  const result = new Map<string, GitFileStatusKind>();
+  const walk = (node: SearchTreeNode): GitFileStatusKind[] => {
+    if (!node.isDir) {
+      const status = fileStatusByPath.get(node.path);
+      return status ? [status] : [];
+    }
+    const statuses = node.children.flatMap(walk);
+    const aggregated = aggregateGitStatuses(statuses);
+    if (aggregated) result.set(node.path, aggregated);
+    return statuses;
+  };
+  for (const node of nodes) walk(node);
+  return result;
+}
+
+function ChangeTreeNode({
+  node,
+  depth,
+  expandedPaths,
+  onToggleExpanded,
+  gitStatusByTreePath,
+  folderStatusByRelativePath,
+  onOpenFile,
+  t,
+}: {
+  node: SearchTreeNode;
+  depth: number;
+  expandedPaths: Set<string>;
+  onToggleExpanded: (path: string, open: boolean) => void;
+  gitStatusByTreePath: Map<string, GitFileStatus>;
+  folderStatusByRelativePath: Map<string, GitFileStatusKind>;
+  onOpenFile: OpenFileHandler;
+  t: Translate;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const open = expandedPaths.has(node.path);
+  const gitStatus = node.isDir ? undefined : gitStatusByTreePath.get(node.path);
+  const folderKind = node.isDir ? folderStatusByRelativePath.get(node.path) : undefined;
+  const fileName = gitStatus ? getFileName(gitStatus.filePath) : node.name;
+  const deleted = gitStatus?.status === "deleted";
+
+  return (
+    <div>
+      <div
+        onClick={() => {
+          if (node.isDir) {
+            onToggleExpanded(node.path, !open);
+            return;
+          }
+          if (!gitStatus) return;
+          onOpenFile(gitStatus.filePath, getFileName(gitStatus.filePath), { modeHint: "diff" });
+        }}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        title={gitStatus?.filePath ?? node.path}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 4,
+          paddingLeft: 8 + depth * 14,
+          paddingRight: 8,
+          height: 24,
+          cursor: "pointer",
+          background: hovered ? "var(--bg-hover)" : "transparent",
+          borderRadius: 4,
+          userSelect: "none",
+        }}
+      >
+        {node.isDir ? (
+          <svg
+            width="10" height="10" viewBox="0 0 10 10" fill="none"
+            stroke="var(--text-dim)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"
+            style={{ flexShrink: 0, transform: open ? "rotate(90deg)" : "none", transition: "transform 0.1s" }}
+          >
+            <polyline points="3 2 7 5 3 8" />
+          </svg>
+        ) : (
+          <span style={{ width: 10, flexShrink: 0 }} />
+        )}
+        <span style={{ flexShrink: 0, display: "flex", alignItems: "center", opacity: node.isDir ? 1 : 0.85 }}>
+          {node.isDir ? <FolderIcon size={14} open={open} /> : getFileIcon(fileName, 13)}
+        </span>
+        <span
+          style={{
+            fontSize: 12,
+            color: "var(--text)",
+            textDecoration: deleted ? "line-through" : undefined,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            flex: 1,
+          }}
+        >
+          {node.name}
+        </span>
+        {node.isDir && folderKind ? (
+          <span
+            title={t(GIT_STATUS_KEYS[folderKind])}
+            aria-label={t(GIT_STATUS_KEYS[folderKind])}
+            style={{
+              width: 14,
+              height: 14,
+              flexShrink: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: `color-mix(in srgb, ${GIT_STATUS_COLORS[folderKind]} 45%, transparent)` }} />
+          </span>
+        ) : gitStatus ? (
+          <GitStatusBadge status={gitStatus} t={t} />
+        ) : null}
+      </div>
+      {node.isDir && open ? node.children.map((child) => (
+        <ChangeTreeNode
+          key={child.path}
+          node={child}
+          depth={depth + 1}
+          expandedPaths={expandedPaths}
+          onToggleExpanded={onToggleExpanded}
+          gitStatusByTreePath={gitStatusByTreePath}
+          folderStatusByRelativePath={folderStatusByRelativePath}
+          onOpenFile={onOpenFile}
+          t={t}
+        />
+      )) : null}
     </div>
   );
 }
@@ -539,6 +692,9 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
   const [highlightedPaths, setHighlightedPaths] = useState<Set<string>>(new Set());
   const [gitFiles, setGitFiles] = useState<GitFileStatus[]>([]);
   const [gitLineStats, setGitLineStats] = useState({ additions: 0, deletions: 0 });
+  const [changesViewMode, setChangesViewMode] = useState<ChangesViewMode>(() => loadChangesViewMode());
+  const [changeTreeExpanded, setChangeTreeExpanded] = useState<Set<string>>(new Set());
+  const knownChangeDirsRef = useRef<Set<string>>(new Set());
   const [uploadPhase, setUploadPhase] = useState<UploadPhase>("idle");
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -627,6 +783,24 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
   const gitStatusByPath = useMemo(() => new Map(
     gitFiles.map((status) => [normalizeFilePathSlashes(status.filePath), status]),
   ), [gitFiles]);
+
+  const gitStatusByTreePath = useMemo(
+    () => new Map(gitFiles.map((status) => [getChangeTreePath(status.filePath, cwd), status])),
+    [cwd, gitFiles],
+  );
+
+  const changeTree = useMemo(
+    () => compactFolders(buildSearchTree([...gitStatusByTreePath.keys()])),
+    [gitStatusByTreePath],
+  );
+
+  const changeFolderStatusByPath = useMemo(
+    () => folderStatusByPath(
+      changeTree,
+      new Map([...gitStatusByTreePath].map(([treePath, status]) => [treePath, status.status])),
+    ),
+    [changeTree, gitStatusByTreePath],
+  );
 
   const changedDirectoryPaths = useMemo(() => {
     const directories = new Set<string>();
@@ -762,6 +936,8 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
       setUploadSummary(null);
       setPendingConflict(null);
       setUploadError(null);
+      setChangeTreeExpanded(new Set());
+      knownChangeDirsRef.current = new Set();
     }
 
     setLoading(cwdChanged);
@@ -797,6 +973,28 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
   useEffect(() => {
     onChangesCountChange?.(gitFiles.length);
   }, [gitFiles, onChangesCountChange]);
+
+  useEffect(() => {
+    const dirs = collectDirectoryPaths(changeTree);
+    setChangeTreeExpanded((prev) => {
+      const next = new Set(prev);
+      let changed = false;
+      for (const dir of dirs) {
+        if (!knownChangeDirsRef.current.has(dir) && !next.has(dir)) {
+          next.add(dir);
+          changed = true;
+        }
+      }
+      for (const dir of next) {
+        if (!dirs.has(dir)) {
+          next.delete(dir);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+    knownChangeDirsRef.current = dirs;
+  }, [changeTree]);
 
   const showUploadFeedback = uploadBusy || pendingConflict !== null || uploadError !== null || uploadSummary !== null;
 
@@ -998,20 +1196,87 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
       {!changesCollapsed && gitFiles.length > 0 && (
         <div style={{ padding: "0 4px 2px" }}>
           <div
-            aria-label={t("files.changeStats", {
-              count: gitFiles.length,
-              additions: gitLineStats.additions,
-              deletions: gitLineStats.deletions,
-            })}
-            style={{ display: "flex", alignItems: "center", gap: 6, height: 24, padding: "0 10px", fontSize: 12 }}
+            style={{ display: "flex", alignItems: "center", gap: 6, height: 24, padding: "0 4px 0 10px", fontSize: 12 }}
           >
-            <span style={{ color: "var(--text-dim)" }}>
-              {t("files.changedCount", { count: gitFiles.length })}
-            </span>
-            <span style={{ color: GIT_STATUS_COLORS.added, fontFamily: "var(--font-mono)" }}>+{gitLineStats.additions}</span>
-            <span style={{ color: GIT_STATUS_COLORS.deleted, fontFamily: "var(--font-mono)" }}>-{gitLineStats.deletions}</span>
+            <div
+              aria-label={t("files.changeStats", {
+                count: gitFiles.length,
+                additions: gitLineStats.additions,
+                deletions: gitLineStats.deletions,
+              })}
+              style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flex: 1 }}
+            >
+              <span style={{ color: "var(--text-dim)" }}>
+                {t("files.changedCount", { count: gitFiles.length })}
+              </span>
+              <span style={{ color: GIT_STATUS_COLORS.added, fontFamily: "var(--font-mono)" }}>+{gitLineStats.additions}</span>
+              <span style={{ color: GIT_STATUS_COLORS.deleted, fontFamily: "var(--font-mono)" }}>-{gitLineStats.deletions}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                const next = changesViewMode === "list" ? "tree" : "list";
+                saveChangesViewMode(next);
+                setChangesViewMode(next);
+                if (next === "tree") {
+                  const dirs = collectDirectoryPaths(changeTree);
+                  knownChangeDirsRef.current = dirs;
+                  setChangeTreeExpanded(dirs);
+                }
+              }}
+              title={t(changesViewMode === "tree" ? "files.viewAsList" : "files.viewAsTree")}
+              aria-label={t(changesViewMode === "tree" ? "files.viewAsList" : "files.viewAsTree")}
+              aria-pressed={changesViewMode === "tree"}
+              style={{
+                width: 22,
+                height: 22,
+                padding: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                flexShrink: 0,
+                border: "none",
+                borderRadius: 4,
+                background: "none",
+                color: "var(--text-dim)",
+                cursor: "pointer",
+              }}
+              onMouseEnter={(event) => { event.currentTarget.style.color = "var(--text)"; event.currentTarget.style.background = "var(--bg-hover)"; }}
+              onMouseLeave={(event) => { event.currentTarget.style.color = "var(--text-dim)"; event.currentTarget.style.background = "none"; }}
+            >
+              {changesViewMode === "tree" ? (
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                  <path d="M8 6h13M8 12h13M8 18h13" />
+                  <path d="M3.5 6h.01M3.5 12h.01M3.5 18h.01" />
+                </svg>
+              ) : (
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M8 6h13M8 12h13M8 18h13" />
+                  <path d="M3 6v12" />
+                  <path d="M3 12h5" />
+                </svg>
+              )}
+            </button>
           </div>
-          {gitFiles.map((status) => (
+          {changesViewMode === "tree" ? changeTree.map((node) => (
+            <ChangeTreeNode
+              key={node.path}
+              node={node}
+              depth={0}
+              expandedPaths={changeTreeExpanded}
+              onToggleExpanded={(path, open) => {
+                setChangeTreeExpanded((prev) => {
+                  const next = new Set(prev);
+                  if (open) next.add(path); else next.delete(path);
+                  return next;
+                });
+              }}
+              gitStatusByTreePath={gitStatusByTreePath}
+              folderStatusByRelativePath={changeFolderStatusByPath}
+              onOpenFile={onOpenFile}
+              t={t}
+            />
+          )) : gitFiles.map((status) => (
             <ChangeRow key={status.filePath} status={status} cwd={cwd} onOpenFile={onOpenFile} t={t} />
           ))}
         </div>
